@@ -1,0 +1,7 @@
+numpy
+pathlib
+tqdm
+typing
+creationism
+Cython
+pillow==9.5.0

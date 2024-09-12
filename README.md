@@ -6,7 +6,9 @@ The folder `tutorials` contains the code to get started with the MONKEY challeng
 The Jupyter notebooks show you how to preprocess the data, train a model and run inference.
 
 ## Creating the inference docker image
-Following soon.
+The folder `docker` contains the code to create the inference docker image that can be submitted to the MONKEY challenge.
+`test_run.sh` lets you test the docker image locally. After that you can save it with `save.sh` and submit it to the MONKEY challenge.
+If you want to see the log files of your submission, you have to submit to the Debugging Phase of the challenge.
 
 ## Results evaluation
 The folder `evaluation` contains the code to evaluate the results of the MONKEY challenge. The exact same script is used for the leaderboard evaluation computation.
