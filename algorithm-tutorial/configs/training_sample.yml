@@ -1,0 +1,5 @@
+training:
+- wsa:
+    path: ./data/annotations_polygon/DI_S02_P000001_combined_polygon.xml
+  wsi:
+    path: ./data/images/A_P000001.tif

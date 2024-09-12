@@ -1,0 +1,39 @@
+
+'wholeslidedata': {
+    'default': {
+        'yaml_source': "./configs/training_sample.yml",
+        "seed": 42,
+        "image_backend": "asap",
+        'labels': {
+            "ROI": 0,
+            "lymphocytes": 1
+        },
+    
+        
+        'batch_shape': {
+            'batch_size': 10,
+            'spacing': 0.5,
+            'shape': [128,128,3],
+            'y_shape': [1000, 6],
+        },
+        
+        
+        
+        "annotation_parser": {
+            "sample_label_names": ['roi'],
+        },
+        
+        'point_sampler_name': "RandomPointSampler",
+        'point_sampler': {
+            "buffer": {'spacing': "${batch_shape.spacing}", 'value': -64},
+        },
+        
+        'patch_label_sampler_name': 'DetectionPatchLabelSampler',
+        'patch_label_sampler': {
+            "max_number_objects": 1000,
+            "detection_labels": ['lymphocytes'],
+                
+        },
+        
+    }
+}

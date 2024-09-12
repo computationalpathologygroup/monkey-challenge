@@ -1,0 +1,44 @@
+[
+    {
+        "pk": "A_P000001",
+        "inputs": [
+            {
+                "image": {
+                    "name": "A_P000001_PAS_CPG.tif"
+                },
+                "interface": {
+                    "slug": "kidney-transplant-biopsy",
+                    "kind": "Image",
+                    "super_kind": "Image",
+                    "relative_path": "images/kidney-transplant-biopsy-wsi-pas"
+                }
+            }
+        ],
+        "outputs": [
+            {
+                "interface": {
+                    "slug": "detected-lymphocytes",
+                    "kind": "Multiple points",
+                    "super_kind": "File",
+                    "relative_path": "detected-lymphocytes.json"
+                }
+            },
+            {
+                "interface": {
+                    "slug": "detected-monocytes",
+                    "kind": "Multiple points",
+                    "super_kind": "File",
+                    "relative_path": "detected-monocytes.json"
+                }
+            },
+            {
+                "interface": {
+                    "slug": "detected-inflammatory-cells",
+                    "kind": "Multiple points",
+                    "super_kind": "File",
+                    "relative_path": "detected-inflammatory-cells.json"
+                }
+            }
+        ]
+    }
+]
