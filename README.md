@@ -52,3 +52,9 @@ The examples provided are the three files that are used for the evaluation phase
     └── output/
         └── metrics.json
 ```
+
+## Other useful scripts
+The folder `utils` contains other useful functions
+- `json_to_xml.py`: Script that converts the output json files from grand-challenge back to xml files compatible with ASAP
+There is also an optional `prob_cutoff` argument, that lets you filter out annotations with a threshold.
+Helpful for visualising your results in ASAP.
