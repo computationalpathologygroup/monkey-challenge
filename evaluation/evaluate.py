@@ -95,7 +95,7 @@ def process(job):
     lymphocytes_froc = get_froc_vals(gt_lymphocytes, result_detected_lymphocytes,
                                      radius=int(4 / SPACING_LEVEL0))  # margin for lymphocytes is 4um at spacing 0.25 um / pixel
     monocytes_froc = get_froc_vals(gt_monocytes, result_detected_monocytes,
-                                   radius=int(10 / 0.25))  # margin for monocytes is 10um at spacing 0.25 um / pixel
+                                   radius=int(10 / SPACING_LEVEL0))  # margin for monocytes is 10um at spacing 0.25 um / pixel
     inflamm_froc = get_froc_vals(gt_inf_cells, result_detected_inflammatory_cells, radius=int(
         7.5 / SPACING_LEVEL0))  # margin for inflammatory cells is 7.5um at spacing 0.24 um / pixel
 
