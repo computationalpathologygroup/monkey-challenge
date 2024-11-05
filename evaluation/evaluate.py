@@ -137,8 +137,7 @@ def get_froc_vals(gt_dict, result_dict, radius: int):
     area_mm2 = SPACING_LEVEL0 * SPACING_LEVEL0 * gt_dict["area_rois"] / 1000000
     # result_prob = [i['probability'] for i in result_dict['points']]
     result_prob = [i['probability'] for i in result_dict['points']]
-    # make some dummy values between 0 and 1 for the result prob
-    # result_prob = [np.random.rand() for i in range(len(result_dict['points']))]
+
     result_coords = [[i['point'][0], i['point'][1]] for i in result_dict['points']]
 
     # prepare the data for the FROC curve computation with monai
@@ -194,11 +193,24 @@ def match_coordinates(ground_truth, predictions, pred_prob, margin):
     matched_pred = set()
 
     # Iterate over the distance matrix to find the closest matches
-    for gt_idx in range(len(ground_truth)):
-        closest_pred_idx = np.argmin(dist_matrix[gt_idx])
-        if dist_matrix[gt_idx, closest_pred_idx] <= margin:
-            matched_gt.add(gt_idx)
-            matched_pred.add(closest_pred_idx)
+    while True:
+        # Find the minimum distance across all av min_dist = np.min(dist_matrix)
+        min_dist = np.min(dist_matrix)
+
+        # If the minimum distance exceeds the margin or no valid pairs left, break
+        if min_dist > margin or min_dist == np.inf:
+            break
+
+        # Get the indices of the GT and prediction points with the minimum distance
+        gt_idx, closest_pred_idx = np.unravel_index(np.argmin(dist_matrix), dist_matrix.shape)
+
+        # Mark these points as matched
+        matched_gt.add(gt_idx)
+        matched_pred.add(closest_pred_idx)
+
+        # Set the row and column of the matched points to infinity in the original distance matrix
+        dist_matrix[gt_idx, :] = np.inf  # Mask this GT point
+        dist_matrix[:, closest_pred_idx] = np.inf  # Mask this Pred point
 
     # Calculate true positives, false negatives, and false positives
     true_positives = len(matched_gt)
