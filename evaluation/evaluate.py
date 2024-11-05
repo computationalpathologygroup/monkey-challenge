@@ -127,17 +127,19 @@ def get_froc_vals(gt_dict, result_dict, radius: int):
               true positive probabilities, false positive probabilities, total positives,
               area in mm², and FROC score.
     """
-    # create a mask from the gt coordinates with circles of given radius
-    if len(gt_dict['points']) == 0:
+    # in case there are no predictions
+    if len(result_dict['points']) == 0:
         return {'sensitivity_slide': [0], 'fp_per_mm2_slide': [0], 'fp_probs_slide': [0],
                 'tp_probs_slide': [0], 'total_pos_slide': 0, 'area_mm2_slide': 0, 'froc_score_slide': 0}
+    if len(gt_dict['points']) == 0:
+        return None
+
     gt_coords = [i['point'] for i in gt_dict['points']]
     gt_rois = [i['polygon'] for i in gt_dict['rois']]
     # compute the area of the polygon in roi
     area_mm2 = SPACING_LEVEL0 * SPACING_LEVEL0 * gt_dict["area_rois"] / 1000000
     # result_prob = [i['probability'] for i in result_dict['points']]
     result_prob = [i['probability'] for i in result_dict['points']]
-
     result_coords = [[i['point'][0], i['point'][1]] for i in result_dict['points']]
 
     # prepare the data for the FROC curve computation with monai
@@ -177,7 +179,7 @@ def match_coordinates(ground_truth, predictions, pred_prob, margin):
         tp_probs (list of floats): Probabilities of the true positive predictions.
         fp_probs (list of floats): Probabilities of the false positive predictions.
     """
-    if len(ground_truth) == 0 or len(predictions) == 0:
+    if len(ground_truth) == 0 and len(predictions) == 0:
         return 0, 0, 0, np.array([]), np.array([])
         # return true_positives, false_negatives, false_positives, np.array(tp_probs), np.array(fp_probs)
     # Convert lists to numpy arrays for easier distance calculations
@@ -273,6 +275,9 @@ def get_aggr_froc(metrics_dict):
     tp_probs = np.array([item for sublist in metrics_dict['tp_probs_slide'] for item in sublist])
     total_pos = sum(metrics_dict['total_pos_slide'])
     area_mm2 = sum(metrics_dict['area_mm2_slide'])
+    if total_pos == 0:
+        return {'area_mm2_aggr': area_mm2,
+                'froc_score_aggr': 0}
 
     # sensitivity, fp_overall = compute_froc_curve_data(fp_probs, tp_probs, total_pos, area_mm2)
     fp_overall, sensitivity_overall, = compute_froc_curve_data(fp_probs, tp_probs, total_pos, area_mm2)
@@ -304,6 +309,9 @@ def format_metrics_for_aggr(metrics_list, cell_type):
             if key not in aggr:
                 aggr[key] = []
             # Append the value to the list corresponding to the key
+            # Remove None values in list
+            if type(value) is list:
+                value = [x for x in value if x is not None]
             aggr[key].append(value)
 
     return aggr
