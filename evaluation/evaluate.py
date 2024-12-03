@@ -20,7 +20,7 @@ Happy programming!
 import json
 from pathlib import Path
 from pprint import pformat, pprint
-from monai.metrics import compute_froc_score, compute_froc_curve_data
+import monai.metrics as mm
 from scipy.spatial import distance
 from sklearn.metrics import auc
 import numpy as np
@@ -28,17 +28,19 @@ import numpy as np
 from helpers import run_prediction_processing
 
 # for local debugging
-import os
-INPUT_DIRECTORY = Path(f"{os.getcwd()}/test/input")
-OUTPUT_DIRECTORY = Path(f"{os.getcwd()}/test/output")
-GROUND_TRUTH_DIRECTORY = Path(f"{os.getcwd()}/ground_truth")
+# import os
+# INPUT_DIRECTORY = Path(f"{os.getcwd()}/test/input")
+# OUTPUT_DIRECTORY = Path(f"{os.getcwd()}/test/output")
+# GROUND_TRUTH_DIRECTORY = Path(f"{os.getcwd()}/ground_truth")
 
 # for docker building
-# INPUT_DIRECTORY = Path("/input")
-# OUTPUT_DIRECTORY = Path("/output")
-# GROUND_TRUTH_DIRECTORY = Path("/opt/ml/input/data/ground_truth")
+INPUT_DIRECTORY = Path("/input")
+OUTPUT_DIRECTORY = Path("/output")
+GROUND_TRUTH_DIRECTORY = Path("/opt/ml/input/data/ground_truth")
 
 SPACING_LEVEL0 = 0.24199951445730394
+GT_MM = True
+SHORT_METRICS = False
 
 def process(job):
     """Processes a single algorithm job, looking at the outputs"""
@@ -67,17 +69,19 @@ def process(job):
     result_detected_lymphocytes = load_json_file(
         location=location_detected_lymphocytes,
     )
-    result_detected_lymphocytes = convert_mm_to_pixel(result_detected_lymphocytes)
 
     result_detected_monocytes = load_json_file(
         location=location_detected_monocytes,
     )
-    result_detected_monocytes = convert_mm_to_pixel(result_detected_monocytes)
 
     result_detected_inflammatory_cells = load_json_file(
         location=location_detected_inflammatory_cells,
     )
-    result_detected_inflammatory_cells = convert_mm_to_pixel(result_detected_inflammatory_cells)
+
+    if not GT_MM:
+        result_detected_inflammatory_cells = convert_mm_to_pixel(result_detected_inflammatory_cells)
+        result_detected_monocytes = convert_mm_to_pixel(result_detected_monocytes)
+        result_detected_lymphocytes = convert_mm_to_pixel(result_detected_lymphocytes)
 
     # Thirdly, retrieve the input image name to match it with an image in your ground truth
     file_id = get_image_name(
@@ -92,12 +96,14 @@ def process(job):
     gt_inf_cells = load_json_file(location=GROUND_TRUTH_DIRECTORY / f"{file_id}_inflammatory-cells.json")
 
     # compare the results to your ground truth and compute some metrics
+    radius_lymph = int(4 / SPACING_LEVEL0) if GT_MM else 0.004 # margin for lymphocytes is 4um at spacing 0.25 um / pixel
+    radius_mono = int(10 / SPACING_LEVEL0) if GT_MM else 0.01 # margin for monocytes is 10um at spacing 0.25 um / pixel
+    radius_infl = int(7.5 / SPACING_LEVEL0) if GT_MM else 0.0075 # margin for inflammatory cells is 7.5um at spacing 0.24 um / pixel
     lymphocytes_froc = get_froc_vals(gt_lymphocytes, result_detected_lymphocytes,
-                                     radius=int(4 / SPACING_LEVEL0))  # margin for lymphocytes is 4um at spacing 0.25 um / pixel
+                                     radius=radius_lymph)
     monocytes_froc = get_froc_vals(gt_monocytes, result_detected_monocytes,
-                                   radius=int(10 / SPACING_LEVEL0))  # margin for monocytes is 10um at spacing 0.25 um / pixel
-    inflamm_froc = get_froc_vals(gt_inf_cells, result_detected_inflammatory_cells, radius=int(
-        7.5 / SPACING_LEVEL0))  # margin for inflammatory cells is 7.5um at spacing 0.24 um / pixel
+                                   radius=radius_mono)
+    inflamm_froc = get_froc_vals(gt_inf_cells, result_detected_inflammatory_cells, radius=radius_infl)
 
     report += "Lymphocytes FROC:\n" + pformat({k: v for k, v in lymphocytes_froc.items() if type(v) is not list}) + "\n"
     report += "Monocytes FROC:\n" + pformat({k: v for k, v in monocytes_froc.items() if type(v) is not list}) + "\n"
@@ -132,13 +138,12 @@ def get_froc_vals(gt_dict, result_dict, radius: int):
         return {'sensitivity_slide': [0], 'fp_per_mm2_slide': [0], 'fp_probs_slide': [0],
                 'tp_probs_slide': [0], 'total_pos_slide': 0, 'area_mm2_slide': 0, 'froc_score_slide': 0}
     if len(gt_dict['points']) == 0:
-        return None
+        return {}
 
     gt_coords = [i['point'] for i in gt_dict['points']]
     gt_rois = [i['polygon'] for i in gt_dict['rois']]
     # compute the area of the polygon in roi
     area_mm2 = SPACING_LEVEL0 * SPACING_LEVEL0 * gt_dict["area_rois"] / 1000000
-    # result_prob = [i['probability'] for i in result_dict['points']]
     result_prob = [i['probability'] for i in result_dict['points']]
     result_coords = [[i['point'][0], i['point'][1]] for i in result_dict['points']]
 
@@ -148,13 +153,7 @@ def get_froc_vals(gt_dict, result_dict, radius: int):
     total_pos = len(gt_coords)
     # the metric is implemented to normalize by the number of images, we however want to have it by mm2, so we set
     # num_images = ROI area in mm2
-    fp_per_mm2_slide, sensitivity = compute_froc_curve_data(fp_probs, tp_probs, total_pos, area_mm2)
-    if len(fp_per_mm2_slide) > 1 and len(sensitivity) > 1:
-        area_under_froc = auc(fp_per_mm2_slide, sensitivity)
-        froc_score = compute_froc_score(fp_per_mm2_slide, sensitivity, eval_thresholds=(10, 20, 50, 100, 200, 300))
-    else:
-        area_under_froc = 0
-        froc_score = 0
+    sensitivity, fp_per_mm2_slide, froc_score = get_froc_score(fp_probs, tp_probs, total_pos, area_mm2)
 
     return {'sensitivity_slide': list(sensitivity), 'fp_per_mm2_slide': list(fp_per_mm2_slide),
             'fp_probs_slide': list(fp_probs), 'tp_probs_slide': list(tp_probs), 'total_pos_slide': total_pos,
@@ -226,6 +225,24 @@ def match_coordinates(ground_truth, predictions, pred_prob, margin):
     return true_positives, false_negatives, false_positives, np.array(tp_probs), np.array(fp_probs)
 
 
+def get_froc_score(fp_probs, tp_probs, total_pos, area_mm2):
+    eval_thresholds = (10, 20, 50, 100, 200, 300)
+
+    fp_per_mm2, sensitivity = mm.compute_froc_curve_data(fp_probs, tp_probs, total_pos, area_mm2)
+    if len(fp_per_mm2) == 0 and len(sensitivity) == 0:
+        return sensitivity, fp_per_mm2, 0
+    if len(sensitivity) == 1:
+        # we only have one true positive point, we have to compute the FROC values a bit differently
+        sensitivity = [1]
+        fp_per_mm2 = [len(fp_probs)/area_mm2]
+        froc_score = np.mean([int(fp_per_mm2[0] < i) for i in eval_thresholds])
+    else:
+        # area_under_froc = auc(fp_per_mm2, sensitivity)
+        froc_score = mm.compute_froc_score(fp_per_mm2, sensitivity, eval_thresholds=eval_thresholds)
+
+    return sensitivity, fp_per_mm2, froc_score
+
+
 def main():
     print_inputs()
     predictions = read_predictions()
@@ -252,13 +269,14 @@ def main():
         'inflammatory-cells': get_aggr_froc(inflammatory_cells_metrics)
     }
 
-    # clean up the per file metrics
-    for file_id, file_metrics in metrics['per_slide'].items():
-        for cell_type in ['lymphocytes', 'monocytes', 'inflammatory-cells']:
-            for i in ['sensitivity_slide', 'fp_per_slide', 'fp_probs_slide', 'tp_probs_slide',
-                      'total_pos_slide']:
-                if i in file_metrics[cell_type]:
-                    del file_metrics[cell_type][i]
+    # clean up the per-file metrics
+    if SHORT_METRICS:
+        for file_id, file_metrics in metrics['per_slide'].items():
+            for cell_type in ['lymphocytes', 'monocytes', 'inflammatory-cells']:
+                for i in ['sensitivity_slide', 'fp_per_slide', 'fp_probs_slide', 'tp_probs_slide',
+                          'total_pos_slide']:
+                    if i in file_metrics[cell_type]:
+                        del file_metrics[cell_type][i]
 
     # Aggregate the metrics_per_slide
     metrics["aggregates"] = aggregated_metrics
@@ -270,31 +288,24 @@ def main():
 
 
 def get_aggr_froc(metrics_dict):
+    if len(metrics_dict) == 0:
+        return {'sensitivity_aggr': [0], 'fp_aggr': [0], 'area_mm2_aggr': 0, 'froc_score_aggr': 0}
     # https://docs.monai.io/en/0.5.0/_modules/monai/metrics/froc.html
     fp_probs = np.array([item for sublist in metrics_dict['fp_probs_slide'] for item in sublist])
     tp_probs = np.array([item for sublist in metrics_dict['tp_probs_slide'] for item in sublist])
     total_pos = sum(metrics_dict['total_pos_slide'])
     area_mm2 = sum(metrics_dict['area_mm2_slide'])
     if total_pos == 0:
-        return {'area_mm2_aggr': area_mm2,
-                'froc_score_aggr': 0}
+        return {'sensitivity_aggr': [0], 'fp_per_mm2_aggr': [0], 'area_mm2_aggr': area_mm2, 'froc_score_aggr': 0}
 
     # sensitivity, fp_overall = compute_froc_curve_data(fp_probs, tp_probs, total_pos, area_mm2)
-    fp_overall, sensitivity_overall, = compute_froc_curve_data(fp_probs, tp_probs, total_pos, area_mm2)
-    if len(fp_overall) > 1 and len(sensitivity_overall) > 1:
-        area_under_froc = auc(fp_overall, sensitivity_overall)
-        froc_score = compute_froc_score(fp_overall, sensitivity_overall, eval_thresholds=(10, 20, 50, 100, 200, 300))
-    else:
-        area_under_froc = 0
-        froc_score = 0
+    sensitivity_overall, fp_per_mm2, froc_score_overall = get_froc_score(fp_probs, tp_probs, total_pos, area_mm2)
 
-    # return {'sensitivity_aggr': list(sensitivity_overall), 'fp_aggr': list(fp_overall),
-    #         'fp_probs_aggr': list(fp_probs),
-    #         'tp_probs_aggr': list(tp_probs), 'total_pos_aggr': total_pos, 'area_mm2_aggr': area_mm2,
-    #         'froc_score_aggr': float(froc_score)}
+    return {'sensitivity_aggr': list(sensitivity_overall), 'fp_per_mm2_aggr': list(fp_per_mm2),
+            'area_mm2_aggr': area_mm2, 'froc_score_aggr': float(froc_score_overall)}
 
-    return {'area_mm2_aggr': area_mm2,
-            'froc_score_aggr': float(froc_score)}
+    # return {'area_mm2_aggr': area_mm2,
+    #         'froc_score_aggr': float(froc_score_overall)}
 
 
 def format_metrics_for_aggr(metrics_list, cell_type):
