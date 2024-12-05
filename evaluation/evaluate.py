@@ -40,7 +40,6 @@ GROUND_TRUTH_DIRECTORY = Path("/opt/ml/input/data/ground_truth")
 
 SPACING_LEVEL0 = 0.24199951445730394
 GT_MM = True
-SHORT_METRICS = False
 
 def process(job):
     """Processes a single algorithm job, looking at the outputs"""
@@ -96,9 +95,9 @@ def process(job):
     gt_inf_cells = load_json_file(location=GROUND_TRUTH_DIRECTORY / f"{file_id}_inflammatory-cells.json")
 
     # compare the results to your ground truth and compute some metrics
-    radius_lymph = int(4 / SPACING_LEVEL0) if GT_MM else 0.004 # margin for lymphocytes is 4um at spacing 0.25 um / pixel
-    radius_mono = int(10 / SPACING_LEVEL0) if GT_MM else 0.01 # margin for monocytes is 10um at spacing 0.25 um / pixel
-    radius_infl = int(7.5 / SPACING_LEVEL0) if GT_MM else 0.0075 # margin for inflammatory cells is 7.5um at spacing 0.24 um / pixel
+    radius_lymph = 0.004 if GT_MM else int(4 / SPACING_LEVEL0) # margin for lymphocytes is 4um at spacing 0.25 um / pixel
+    radius_mono = 0.005 if GT_MM else int(5 / SPACING_LEVEL0) # margin for monocytes is 10um at spacing 0.25 um / pixel
+    radius_infl = 0.005 if GT_MM else int(5 / SPACING_LEVEL0) # margin for inflammatory cells is 7.5um at spacing 0.24 um / pixel
     lymphocytes_froc = get_froc_vals(gt_lymphocytes, result_detected_lymphocytes,
                                      radius=radius_lymph)
     monocytes_froc = get_froc_vals(gt_monocytes, result_detected_monocytes,
@@ -270,13 +269,11 @@ def main():
     }
 
     # clean up the per-file metrics
-    if SHORT_METRICS:
-        for file_id, file_metrics in metrics['per_slide'].items():
-            for cell_type in ['lymphocytes', 'monocytes', 'inflammatory-cells']:
-                for i in ['sensitivity_slide', 'fp_per_slide', 'fp_probs_slide', 'tp_probs_slide',
-                          'total_pos_slide']:
-                    if i in file_metrics[cell_type]:
-                        del file_metrics[cell_type][i]
+    for file_id, file_metrics in metrics['per_slide'].items():
+        for cell_type in ['lymphocytes', 'monocytes', 'inflammatory-cells']:
+            for i in ['fp_probs_slide', 'tp_probs_slide', 'total_pos_slide']:
+                if i in file_metrics[cell_type]:
+                    del file_metrics[cell_type][i]
 
     # Aggregate the metrics_per_slide
     metrics["aggregates"] = aggregated_metrics
