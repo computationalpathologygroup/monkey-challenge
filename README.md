@@ -14,7 +14,6 @@ If you want to see the log files of your submission, you have to submit to the D
 The folder `evaluation` contains the code to evaluate the results of the MONKEY challenge. The exact same script is used for the leaderboard evaluation computation.
 
 ### How to use
-Use the `get_froc_vals()`
 
 1. Put the ground truth json files in the folder `evaluation/ground_truth/` with the file name format `case-id_inflammatory-cells.json`,
 `case-id_lympocytes.json` and `case-id_monocytes.json` for the respective cell types. These files are provided along with the
@@ -27,9 +26,21 @@ Additionally, you will need to provide the json file `evaluation/test/output/pre
 the jobs.
 
 3. Run `evaluation.py`. The script will compute the evaluation metrics for each case as well as overall and save them to 
-`evaluation/test/output/metrics.json`.
+`evaluation/test/output/metrics.json`. It will create an additional output file `monkey-evaluation-details.json` 
+for the more extensive metrics list (i.e. per slide and to plot the FROC curve).
+
+The evaluation script will compute the following metrics:
+- **FROC score**: This is derived from the FROC curve by calculating the sensitivity at five pre-selected values of FP/mm²: [10, 20, 50, 100, 200, 300].
+- **Presicion@threshold**: The precision at the threshold of 0.4 and 0.9 (prediction probability of a point).
+- **Recall@threshold**: The recall at the threshold of 0.4 and 0.9 (prediction probability of a point).
 
 The examples provided are the three files that are used for the evaluation phase of the debugging phase.
+
+**Note**: The evaluation script, along with the leaderboards was updated on 23.5.25 to include precision and recall as metrics.
+The output is now also saved in two different files, `metrics.json` for the leaderboard metrics and `monkey-evaluation-details.json` 
+for the more extensive metrics list (i.e. per slide and to plot the FROC curve).
+The previous evaluation script is renamed to `evaluation_old.py`.
+
 
 ```angular2html
 .
@@ -51,6 +62,7 @@ The examples provided are the three files that are used for the evaluation phase
     ├── predictions.json
     └── output/
         └── metrics.json
+        └── monkey-evaluation-details.json
 ```
 
 ## Other useful scripts

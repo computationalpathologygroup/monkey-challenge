@@ -21,13 +21,11 @@ import json
 from pathlib import Path
 from pprint import pformat, pprint
 import monai.metrics as mm
-# from scipy.spatial import distance
-from scipy.spatial import cKDTree
+from scipy.spatial import distance
+from sklearn.metrics import auc
 import numpy as np
 
 from helpers import run_prediction_processing
-from multiprocessing import Pool
-from helpers import get_max_workers
 
 # for local debugging
 # import os
@@ -98,29 +96,29 @@ def process(job):
 
     # compare the results to your ground truth and compute some metrics
     radius_lymph = 0.004 if GT_MM else int(4 / SPACING_LEVEL0) # margin for lymphocytes is 4um at spacing 0.25 um / pixel
-    radius_mono = 0.005 if GT_MM else int(5 / SPACING_LEVEL0) # margin for monocytes is 5um at spacing 0.25 um / pixel
-    radius_infl = 0.005 if GT_MM else int(5 / SPACING_LEVEL0) # margin for inflammatory cells is 5um at spacing 0.24 um / pixel
-    lymphocytes_eval = get_froc_vals_pr(gt_lymphocytes, result_detected_lymphocytes,
-                                        radius=radius_lymph)
-    monocytes_eval = get_froc_vals_pr(gt_monocytes, result_detected_monocytes,
-                                      radius=radius_mono)
-    inflamm_eval = get_froc_vals_pr(gt_inf_cells, result_detected_inflammatory_cells, radius=radius_infl)
+    radius_mono = 0.005 if GT_MM else int(5 / SPACING_LEVEL0) # margin for monocytes is 10um at spacing 0.25 um / pixel
+    radius_infl = 0.005 if GT_MM else int(5 / SPACING_LEVEL0) # margin for inflammatory cells is 7.5um at spacing 0.24 um / pixel
+    lymphocytes_froc = get_froc_vals(gt_lymphocytes, result_detected_lymphocytes,
+                                     radius=radius_lymph)
+    monocytes_froc = get_froc_vals(gt_monocytes, result_detected_monocytes,
+                                   radius=radius_mono)
+    inflamm_froc = get_froc_vals(gt_inf_cells, result_detected_inflammatory_cells, radius=radius_infl)
 
-    report += "Lymphocytes eval:\n" + pformat({k: v for k, v in lymphocytes_eval.items() if type(v) is not list}) + "\n"
-    report += "Monocytes eval:\n" + pformat({k: v for k, v in monocytes_eval.items() if type(v) is not list}) + "\n"
-    report += "Inflammatory cells eval:\n" + pformat({k: v for k, v in inflamm_eval.items() if type(v) is not list}) + "\n"
+    report += "Lymphocytes FROC:\n" + pformat({k: v for k, v in lymphocytes_froc.items() if type(v) is not list}) + "\n"
+    report += "Monocytes FROC:\n" + pformat({k: v for k, v in monocytes_froc.items() if type(v) is not list}) + "\n"
+    report += "Inflammatory cells FROC:\n" + pformat({k: v for k, v in inflamm_froc.items() if type(v) is not list}) + "\n"
 
     print(report)
 
     # Finally, calculate by comparing the ground truth to the actual results
     return (file_id, {
-        'lymphocytes': lymphocytes_eval,
-        'monocytes': monocytes_eval,
-        'inflammatory-cells': inflamm_eval
+        'lymphocytes': lymphocytes_froc,
+        'monocytes': monocytes_froc,
+        'inflammatory-cells': inflamm_froc
     })
 
 
-def get_froc_vals_pr(gt_dict, result_dict, radius: int):
+def get_froc_vals(gt_dict, result_dict, radius: int):
     """
     Computes the Free-Response Receiver Operating Characteristic (FROC) values for given ground truth and result data.
     Using https://docs.monai.io/en/0.5.0/_modules/monai/metrics/froc.html
@@ -152,90 +150,76 @@ def get_froc_vals_pr(gt_dict, result_dict, radius: int):
     true_positives, false_negatives, false_positives, tp_probs, fp_probs = match_coordinates(gt_coords, result_coords,
                                                                                              result_prob, radius)
     total_pos = len(gt_coords)
-
-    pr_40 = compute_precision_recall_threshold(tp_probs, fp_probs, total_pos, threshold=0.4)
-    pr_90 = compute_precision_recall_threshold(tp_probs, fp_probs, total_pos, threshold=0.9)
-
     # the metric is implemented to normalize by the number of images, we however want to have it by mm2, so we set
     # num_images = ROI area in mm2
     sensitivity, fp_per_mm2_slide, froc_score = get_froc_score(fp_probs, tp_probs, total_pos, area_mm2)
 
     return {'sensitivity_slide': list(sensitivity), 'fp_per_mm2_slide': list(fp_per_mm2_slide),
             'fp_probs_slide': list(fp_probs), 'tp_probs_slide': list(tp_probs), 'total_pos_slide': total_pos,
-            'area_mm2_slide': area_mm2, 'froc_score_slide': float(froc_score),
-            'presicion_recall_threshold=0_4_slide': pr_40, 'presicion_recall_threshold=0_9_slide': pr_90,}
-
-
-def compute_precision_recall_threshold(tp_probs, fp_probs, nb_gt, threshold = 0.5):
-    # threshold_pred = min(min(tp_probs), min(fp_probs))
-    y_score_tp_fp = np.concatenate([tp_probs, fp_probs])
-    y_true_tp_fp = [1] * len(tp_probs) + [0] * len(fp_probs)
-
-    # Compute probabilities for true positives and false positives
-    threshold_filter = y_score_tp_fp > threshold
-    y_true_tp_fp_filtered = np.array(y_true_tp_fp)[threshold_filter]
-    y_score_tp_fp_filtered = y_score_tp_fp[threshold_filter]
-
-    tp = sum(y_true_tp_fp_filtered)
-    fp = len(y_score_tp_fp_filtered) - tp
-    fn = nb_gt - tp
-
-    # compute the precision and recall values
-    # precision = tp / (tp + fp)
-    # recall = tp / (tp + fn)
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-    return precision, recall
+            'area_mm2_slide': area_mm2, 'froc_score_slide': float(froc_score)}
 
 
 def match_coordinates(ground_truth, predictions, pred_prob, margin):
     """
-    Faster matching using cKDTree for nearest neighbor search.
+    Matches predicted coordinates to ground truth coordinates within a certain distance margin
+    and computes the associated probabilities for true positives and false positives.
 
     Args:
-        ground_truth (list of tuples): GT points (x, y).
-        predictions (list of tuples): Predicted points (x, y).
-        pred_prob (list of floats): Probabilities of predictions.
-        margin (float): Max distance allowed for matching.
+        ground_truth (list of tuples): List of ground truth coordinates as (x, y).
+        predictions (list of tuples): List of predicted coordinates as (x, y).
+        pred_prob (list of floats): List of probabilities associated with each predicted coordinate.
+        margin (float): The maximum distance for considering a prediction as a true positive.
 
     Returns:
-        true_positives (int), false_negatives (int), false_positives (int),
-        tp_probs (np.array), fp_probs (np.array)
+        true_positives (int): Number of correctly matched predictions.
+        false_negatives (int): Number of ground truth coordinates not matched by any prediction.
+        false_positives (int): Number of predicted coordinates not matched by any ground truth.
+        tp_probs (list of floats): Probabilities of the true positive predictions.
+        fp_probs (list of floats): Probabilities of the false positive predictions.
     """
-
     if len(ground_truth) == 0 and len(predictions) == 0:
         return 0, 0, 0, np.array([]), np.array([])
-
-    if len(predictions) == 0:
-        return 0, len(ground_truth), 0, np.array([]), np.array([])
-
-    if len(ground_truth) == 0:
-        return 0, 0, len(predictions), np.array([]), np.array(pred_prob)
-
-    # Build KDTree from predictions
+        # return true_positives, false_negatives, false_positives, np.array(tp_probs), np.array(fp_probs)
+    # Convert lists to numpy arrays for easier distance calculations
+    gt_array = np.array(ground_truth)
     pred_array = np.array(predictions)
     pred_prob_array = np.array(pred_prob)
-    pred_tree = cKDTree(pred_array)
 
-    # Query ground truth points against prediction tree
-    gt_array = np.array(ground_truth)
-    distances, indices = pred_tree.query(gt_array, distance_upper_bound=margin)
+    # Distance matrix between ground truth and predictions
+    dist_matrix = distance.cdist(gt_array, pred_array)
 
-    matched_pred_indices = set()
-    tp_probs = []
+    # Initialize sets for matched indices
+    matched_gt = set()
+    matched_pred = set()
 
-    for dist, pred_idx in zip(distances, indices):
-        if pred_idx < len(pred_array) and dist <= margin:
-            if pred_idx not in matched_pred_indices:
-                matched_pred_indices.add(pred_idx)
-                tp_probs.append(pred_prob_array[pred_idx])
+    # Iterate over the distance matrix to find the closest matches
+    while True:
+        # Find the minimum distance across all av min_dist = np.min(dist_matrix)
+        min_dist = np.min(dist_matrix)
 
-    true_positives = len(matched_pred_indices)
+        # If the minimum distance exceeds the margin or no valid pairs left, break
+        if min_dist > margin or min_dist == np.inf:
+            break
+
+        # Get the indices of the GT and prediction points with the minimum distance
+        gt_idx, closest_pred_idx = np.unravel_index(np.argmin(dist_matrix), dist_matrix.shape)
+
+        # Mark these points as matched
+        matched_gt.add(gt_idx)
+        matched_pred.add(closest_pred_idx)
+
+        # Set the row and column of the matched points to infinity in the original distance matrix
+        dist_matrix[gt_idx, :] = np.inf  # Mask this GT point
+        dist_matrix[:, closest_pred_idx] = np.inf  # Mask this Pred point
+
+    # Calculate true positives, false negatives, and false positives
+    true_positives = len(matched_gt)
     false_negatives = len(ground_truth) - true_positives
     false_positives = len(predictions) - true_positives
 
-    # Get the probs for false positives
-    fp_probs = [pred_prob_array[i] for i in range(len(predictions)) if i not in matched_pred_indices]
+    # Compute probabilities for true positives and false positives
+    tp_probs = [pred_prob[i] for i in matched_pred]
+    fp_probs = [pred_prob[i] for i in range(len(predictions)) if i not in matched_pred]
 
     return true_positives, false_negatives, false_positives, np.array(tp_probs), np.array(fp_probs)
 
@@ -268,9 +252,7 @@ def main():
     # We work that out from predictions.json
 
     # Use concurrent workers to process the predictions more efficiently
-    max_workers = get_max_workers()
-    with Pool(processes=max_workers) as pool:
-        results = pool.map(process, predictions)
+    results = run_prediction_processing(fn=process, predictions=predictions)
     file_ids = [r[0] for r in results]
     metrics_per_slide = [r[1] for r in results]
     metrics['per_slide'] = {file_id: metrics_per_slide[i] for i, file_id in enumerate(file_ids)}
@@ -296,18 +278,8 @@ def main():
     # Aggregate the metrics_per_slide
     metrics["aggregates"] = aggregated_metrics
 
-    # Split the metrics into metrics.json and monkey-evaluation-details.json
-    metrics_leaderboard = {}
-    for cell_type in ['lymphocytes', 'monocytes', 'inflammatory-cells']:
-        metrics_leaderboard[cell_type] = {
-            'froc_score': aggregated_metrics[cell_type]['froc_score_aggr'],
-            'presicion_threshold=0_4': aggregated_metrics[cell_type]['presicion_recall_threshold=0_4_aggr'][0],
-            'recall_threshold=0_4': aggregated_metrics[cell_type]['presicion_recall_threshold=0_4_aggr'][1],
-            'presicion_threshold=0_9': aggregated_metrics[cell_type]['presicion_recall_threshold=0_9_aggr'][0],
-            'recall_threshold=0_9': aggregated_metrics[cell_type]['presicion_recall_threshold=0_9_aggr'][1]
-        }
-    write_metrics(metrics=metrics_leaderboard)
-    write_extended_evaluations(dictionary=metrics)
+    # Make sure to save the metrics
+    write_metrics(metrics=metrics)
 
     return 0
 
@@ -323,16 +295,11 @@ def get_aggr_froc(metrics_dict):
     if total_pos == 0:
         return {'sensitivity_aggr': [0], 'fp_per_mm2_aggr': [0], 'area_mm2_aggr': area_mm2, 'froc_score_aggr': 0}
 
-    # compute precision and recall at 0.5 and 0.9
-    pr_40 = compute_precision_recall_threshold(tp_probs, fp_probs, total_pos, threshold=0.4)
-    pr_90 = compute_precision_recall_threshold(tp_probs, fp_probs, total_pos, threshold=0.9)
-
     # sensitivity, fp_overall = compute_froc_curve_data(fp_probs, tp_probs, total_pos, area_mm2)
     sensitivity_overall, fp_per_mm2, froc_score_overall = get_froc_score(fp_probs, tp_probs, total_pos, area_mm2)
 
     return {'sensitivity_aggr': list(sensitivity_overall), 'fp_per_mm2_aggr': list(fp_per_mm2),
-            'area_mm2_aggr': area_mm2, 'froc_score_aggr': float(froc_score_overall),
-            'presicion_recall_threshold=0_4_aggr': pr_40, 'presicion_recall_threshold=0_9_aggr': pr_90}
+            'area_mm2_aggr': area_mm2, 'froc_score_aggr': float(froc_score_overall)}
 
     # return {'area_mm2_aggr': area_mm2,
     #         'froc_score_aggr': float(froc_score_overall)}
@@ -427,13 +394,6 @@ def write_metrics(*, metrics):
     # Write a json document used for ranking results on the leaderboard
     with open(OUTPUT_DIRECTORY / "metrics.json", "w") as f:
         f.write(json.dumps(metrics, indent=4))
-
-
-def write_extended_evaluations(*, dictionary):
-    # Write a json document used for ranking results on the leaderboard
-    with open(OUTPUT_DIRECTORY / "monkey-evaluation-details.json", "w") as f:
-        f.write(json.dumps(dictionary, indent=4))
-
 
 
 if __name__ == "__main__":
